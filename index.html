@@ -1,0 +1,1335 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Yu & Cheuk Love App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Custom Styles & Animations */
+        body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        .bg-grid {
+            background-image: radial-gradient(#bedcfc 1.5px, transparent 1.5px);
+            background-size: 24px 24px;
+        }
+
+        @keyframes spin-roulette {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(3600deg); }
+        }
+        .animate-spin-fast {
+            animation: spin-roulette 2s cubic-bezier(0.1, 0.7, 0.1, 1) forwards;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        .animate-float {
+            animation: float 3s ease-in-out infinite;
+        }
+
+        @keyframes pulse-scale {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        .animate-pulse-scale {
+            animation: pulse-scale 2s ease-in-out infinite;
+        }
+
+        /* View Transitions */
+        .view-container {
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+        .view-hidden {
+            opacity: 0;
+            pointer-events: none;
+            position: absolute;
+            transform: translateX(20px);
+            visibility: hidden;
+        }
+        .view-active {
+            opacity: 1;
+            pointer-events: auto;
+            position: relative;
+            transform: translateX(0);
+            visibility: visible;
+        }
+    </style>
+</head>
+<body class="bg-[#E3F2FD] text-slate-800 selection:bg-blue-200 overflow-x-hidden min-h-screen relative">
+    
+    <!-- Background Grid -->
+    <div class="fixed inset-0 pointer-events-none opacity-20 z-0">
+        <div class="absolute top-1/2 left-1/2 w-full h-full -translate-x-1/2 -translate-y-1/2 bg-grid"></div>
+    </div>
+
+    <!-- Main App Container -->
+    <div id="app-root" class="relative z-10 max-w-md mx-auto min-h-screen flex flex-col bg-[#E3F2FD]">
+        <!-- Loading Screen -->
+        <div id="loading-view" class="min-h-screen flex items-center justify-center view-active absolute inset-0 bg-[#E3F2FD] z-50">
+            <div class="text-4xl animate-[spin_1s_linear_infinite]">❤️</div>
+        </div>
+        
+        <!-- Views will be injected here -->
+        <div id="content-root" class="flex-1 flex flex-col hidden"></div>
+    </div>
+
+    <!-- Application Logic -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, addDoc, updateDoc, deleteDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        // --- Configuration & Constants ---
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'yu-cheuk-love-app';
+        
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        const START_DATE = new Date('2025-07-06');
+        const YU_BIRTHDAY = new Date('2004-12-20');
+        const CHEUK_BIRTHDAY = new Date('2004-12-04');
+
+        const EXPENSE_CATS = ['飲食 🍲', '交通 🚌', '娛樂 🎮', '居住 🏠'];
+        const INCOME_CATS = ['人工 💰'];
+        const RATES = { JPY: 0.051, KRW: 0.0058, TWD: 0.24, THB: 0.22, GBP: 9.8, AUD: 5.1, HKD: 1 };
+        const COUNTRIES = [
+            { name: "日本", cities: ["東京", "大阪", "京都", "北海道", "福岡"], currency: "JPY" },
+            { name: "韓國", cities: ["首爾", "釜山", "濟州島"], currency: "KRW" },
+            { name: "台灣", cities: ["台北", "台中", "台南", "高雄"], currency: "TWD" },
+            { name: "泰國", cities: ["曼谷", "清邁", "布吉"], currency: "THB" },
+            { name: "英國", cities: ["倫敦", "曼徹斯特"], currency: "GBP" },
+            { name: "澳洲", cities: ["悉尼", "墨爾本"], currency: "AUD" }
+        ];
+        const FOOD_OPTIONS = [
+            "譚仔三哥", "壽司郎", "麥當勞", "大快活", "車仔麵", "茶餐廳", "放題", "韓燒", "泰國菜", "越南粉",
+            "牛角", "火鍋", "酸菜魚", "漢堡包", "意粉", "點心", "燒鵝飯", "上海菜", "拉麵", "沾麵",
+            "沙拉", "素食", "Omakase", "西餐ステーキ", "居酒屋", "串燒", "麻辣燙", "米線", "石磨腸粉", "煲仔飯"
+        ];
+
+        // --- Utilities ---
+        const calculateDays = (date) => Math.floor((new Date() - new Date(date)) / (1000 * 60 * 60 * 24));
+        const generateDates = (start, end) => {
+            let arr = []; let curr = new Date(start); let e = new Date(end);
+            while(curr <= e) { arr.push(new Date(curr)); curr.setDate(curr.getDate() + 1); }
+            return arr;
+        };
+        const getMockWeather = (dateStr, city) => {
+            const emojis = ['☀️ 晴天', '🌧️ 落雨', '⛅ 多雲', '❄️ 落雪', '⛈️ 雷暴'];
+            const hash = dateStr.split('').reduce((a, b) => a + b.charCodeAt(0), 0) + city.charCodeAt(0);
+            const w = emojis[hash % emojis.length];
+            const t = (hash % 15) + 12;
+            return `${w} ${t}°C`;
+        };
+
+        // --- Global State ---
+        window.appState = {
+            user: null, // Firebase Auth User
+            activeUser: null, // 'Yu' or 'Cheuk'
+            view: 'login', // login, dashboard, todo, money, anniversary, eat, travel, travel-detail, settings
+            globalSettings: { avatars: { Yu: '🐶', Cheuk: '🦊' } },
+            // View Specific States
+            todoTab: 'todo',
+            todos: [],
+            editingTodoId: null,
+            moneyTab: 'history', // history, add, piggy
+            moneyMonth: new Date().toISOString().substring(0, 7),
+            expenses: [],
+            piggyLogs: [],
+            editingExpense: null,
+            travels: [],
+            currentTravel: null,
+            travelTab: 'itinerary', // itinerary, booking, money, prep
+            travelData: { itinerary: [], flights: [], hotels: [], receipts: [], expenses: [], prep: [] },
+            travelSelDate: null,
+            unsubscribes: [],
+            isAdding: false
+        };
+
+        // --- Core Functions ---
+        const clearListeners = () => {
+            window.appState.unsubscribes.forEach(unsub => unsub());
+            window.appState.unsubscribes = [];
+        };
+
+        window.setView = (view, extraData = null) => {
+            window.appState.view = view;
+            window.appState.isAdding = false;
+            if (view === 'travel-detail' && extraData) {
+                window.appState.currentTravel = extraData;
+                window.appState.travelTab = 'itinerary';
+                window.appState.travelSelDate = extraData.startDate;
+                setupTravelDetailListeners(extraData.id);
+            }
+            if (view !== 'travel-detail') {
+                window.appState.currentTravel = null;
+            }
+            render();
+        };
+
+        const render = () => {
+            const root = document.getElementById('content-root');
+            root.classList.remove('hidden');
+            document.getElementById('loading-view').classList.add('hidden');
+            
+            let html = '';
+            switch(window.appState.view) {
+                case 'login': html = renderLoginView(); break;
+                case 'dashboard': html = renderDashboardView(); break;
+                case 'todo': html = renderTodoView(); break;
+                case 'money': html = renderMoneyView(); break;
+                case 'anniversary': html = renderAnniversaryView(); break;
+                case 'eat': html = renderEatView(); break;
+                case 'travel': html = renderTravelListView(); break;
+                case 'travel-detail': html = renderTravelDetailView(); break;
+                case 'settings': html = renderSettingsView(); break;
+            }
+            
+            root.innerHTML = `<div class="view-active flex-1 flex flex-col h-full">${html}</div>`;
+            lucide.createIcons(); // Re-initialize icons
+        };
+
+        // --- Auth & Init ---
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) { console.error("Auth error:", err); }
+        };
+
+        onAuthStateChanged(auth, (u) => {
+            window.appState.user = u;
+            if (u) {
+                // Setup Global Listeners
+                const settingsDoc = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global');
+                onSnapshot(settingsDoc, (snapshot) => {
+                    if (snapshot.exists()) {
+                        window.appState.globalSettings = snapshot.data();
+                        if(window.appState.view !== 'login') render(); // re-render if avatars changed
+                    }
+                });
+                
+                // Data Listeners
+                setupDataListeners();
+            }
+            if(window.appState.view === 'login') render();
+        });
+
+        const setupDataListeners = () => {
+            clearListeners();
+            // Todos
+            window.appState.unsubscribes.push(
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'todos'), snap => {
+                    window.appState.todos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    if(window.appState.view === 'todo') render();
+                })
+            );
+            // Expenses
+            window.appState.unsubscribes.push(
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), snap => {
+                    window.appState.expenses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    if(window.appState.view === 'money') render();
+                })
+            );
+            // Piggy
+            window.appState.unsubscribes.push(
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'piggy'), snap => {
+                    window.appState.piggyLogs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    if(window.appState.view === 'money' && window.appState.moneyTab === 'piggy') render();
+                })
+            );
+            // Travels
+            window.appState.unsubscribes.push(
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'travels'), snap => {
+                    window.appState.travels = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    if(window.appState.view === 'travel') render();
+                })
+            );
+        };
+
+        const setupTravelDetailListeners = (tid) => {
+            const base = `artifacts/${appId}/public/data/travels/${tid}`;
+            ['itinerary', 'flights', 'hotels', 'receipts', 'expenses', 'prep'].forEach(col => {
+                onSnapshot(collection(db, base, col), snap => {
+                    window.appState.travelData[col] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    if(window.appState.view === 'travel-detail') render();
+                });
+            });
+        };
+
+        initAuth();
+
+        // --- Action Handlers (Globally exposed) ---
+        window.actions = {
+            login: (name) => { window.appState.activeUser = name; window.setView('dashboard'); },
+            
+            // Todo
+            setTodoTab: (tab) => { window.appState.todoTab = tab; render(); },
+            addTodo: async () => {
+                const input = document.getElementById('todo-input').value;
+                if(!input.trim()) return;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'todos'), { text: input, type: window.appState.todoTab, creator: window.appState.activeUser, done: false, createdAt: serverTimestamp() });
+                document.getElementById('todo-input').value = '';
+            },
+            toggleTodo: async (id, done) => { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'todos', id), { done }); },
+            delTodo: async (id) => { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'todos', id)); },
+            startEditTodo: (id) => { window.appState.editingTodoId = id; render(); },
+            cancelEditTodo: () => { window.appState.editingTodoId = null; render(); },
+            saveEditTodo: async (id) => {
+                const val = document.getElementById(`edit-todo-${id}`).value;
+                if(!val.trim()) return;
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'todos', id), { text: val });
+                window.appState.editingTodoId = null;
+            },
+
+            // Money
+            setMoneyTab: (tab) => { window.appState.moneyTab = tab; window.appState.editingExpense = null; render(); },
+            setMoneyMonth: (e) => { window.appState.moneyMonth = e.target.value; render(); },
+            saveExpense: async (type) => {
+                const amount = document.getElementById('exp-amount').value;
+                const cat = document.getElementById('exp-cat').value;
+                const note = document.getElementById('exp-note').value;
+                if(!amount) return;
+                
+                const data = { type, amount: parseFloat(amount), cat, note, payer: window.appState.activeUser };
+                if (window.appState.editingExpense) {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', window.appState.editingExpense.id), data);
+                } else {
+                    data.date = new Date().toISOString();
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), data);
+                }
+                window.appState.moneyTab = 'history'; render();
+            },
+            editExpense: (id) => { window.appState.editingExpense = window.appState.expenses.find(e => e.id === id); window.appState.moneyTab = 'add'; render(); },
+            delExpense: async (id) => { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', id)); },
+            addPiggy: async (type) => {
+                const amt = document.getElementById('piggy-amount').value;
+                if(!amt) return;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'piggy'), { type, amount: parseFloat(amt), user: window.appState.activeUser, date: new Date().toISOString() });
+            },
+            delPiggy: async (id) => { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'piggy', id)); },
+
+            // Eat
+            spinEat: () => {
+                const el = document.getElementById('eat-wheel');
+                const resultEl = document.getElementById('eat-result');
+                el.classList.add('animate-spin-fast');
+                el.innerHTML = '🎡';
+                resultEl.innerHTML = '';
+                setTimeout(() => {
+                    el.classList.remove('animate-spin-fast');
+                    el.innerHTML = '✨';
+                    const res = FOOD_OPTIONS[Math.floor(Math.random() * FOOD_OPTIONS.length)];
+                    resultEl.innerHTML = `<p class="text-xs font-bold text-slate-400">決定咗啦！就食</p><h3 class="text-4xl font-black text-blue-500 mt-2">${res}</h3>`;
+                }, 2000);
+            },
+
+            // Travel List
+            toggleAddTravel: (state) => { window.appState.isAdding = state; render(); },
+            updateCountryForm: (e) => {
+                const cName = e.target.value;
+                const country = COUNTRIES.find(c => c.name === cName);
+                const citySelect = document.getElementById('t-city');
+                citySelect.innerHTML = country.cities.map(c => `<option value="${c}">${c}</option>`).join('');
+                citySelect.dataset.currency = country.currency;
+            },
+            saveTravel: async () => {
+                const title = document.getElementById('t-title').value;
+                const startDate = document.getElementById('t-start').value;
+                const endDate = document.getElementById('t-end').value;
+                const country = document.getElementById('t-country').value;
+                const city = document.getElementById('t-city').value;
+                const currency = document.getElementById('t-city').dataset.currency || 'JPY';
+                if(!title || !startDate || !endDate) return alert('請填寫完整資料');
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'travels'), { title, startDate, endDate, country, city, currency, createdAt: serverTimestamp() });
+                window.appState.isAdding = false; render();
+            },
+            delTravel: async (id, e) => { e.stopPropagation(); await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'travels', id)); },
+
+            // Travel Detail Actions
+            setTravelTab: (t) => { window.appState.travelTab = t; window.appState.isAdding = false; render(); },
+            setTravelDate: (d) => { window.appState.travelSelDate = d; render(); },
+            toggleAddItin: (s) => { window.appState.isAdding = s; render(); },
+            addItin: async () => {
+                const time = document.getElementById('i-time').value;
+                const place = document.getElementById('i-place').value;
+                const cat = document.getElementById('i-cat').value;
+                const note = document.getElementById('i-note').value;
+                if(!place) return;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'travels', window.appState.currentTravel.id, 'itinerary'), { time, place, cat, note, date: window.appState.travelSelDate });
+                window.appState.isAdding = false; render();
+            },
+            delItin: async (id) => { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'travels', window.appState.currentTravel.id, 'itinerary', id)); },
+            
+            // Travel Bookings
+            toggleAddSection: (sec, s) => { window.appState.isAdding = s; window.appState.addSection = sec; render(); },
+            addFlight: async () => {
+                const f = { no: document.getElementById('f-no').value, from: document.getElementById('f-from').value, to: document.getElementById('f-to').value, time: document.getElementById('f-time').value, gate: document.getElementById('f-gate').value };
+                if(!f.no) return;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'travels', window.appState.currentTravel.id, 'flights'), f);
+                window.appState.isAdding = false; render();
+            },
+            addHotel: async () => {
+                const h = { name: document.getElementById('h-name').value, checkIn: document.getElementById('h-in').value, checkOut: document.getElementById('h-out').value, phone: document.getElementById('h-phone').value, address: document.getElementById('h-add').value, fileName: document.getElementById('h-file').files[0]?.name || '' };
+                if(!h.name) return;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'travels', window.appState.currentTravel.id, 'hotels'), h);
+                window.appState.isAdding = false; render();
+            },
+            addReceipt: async () => {
+                const r = { title: document.getElementById('r-title').value, fileName: document.getElementById('r-file').files[0]?.name || '' };
+                if(!r.title) return;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'travels', window.appState.currentTravel.id, 'receipts'), r);
+                window.appState.isAdding = false; render();
+            },
+            delDoc: async (col, id) => { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'travels', window.appState.currentTravel.id, col, id)); },
+
+            // Travel Money
+            calcRate: () => {
+                const v = document.getElementById('rate-in').value;
+                const r = RATES[window.appState.currentTravel.currency || 'JPY'] || 1;
+                document.getElementById('rate-out').innerText = `HKD ${(Number(v)*r).toFixed(2)}`;
+            },
+            addTravelExp: async () => {
+                const amt = document.getElementById('te-amt').value;
+                const cat = document.getElementById('te-cat').value;
+                const note = document.getElementById('te-note').value;
+                if(!amt) return;
+                const r = RATES[window.appState.currentTravel.currency || 'JPY'] || 1;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'travels', window.appState.currentTravel.id, 'expenses'), { amount: Number(amt), cat, note, payer: window.appState.activeUser, hkd: (Number(amt)*r).toFixed(2), createdAt: serverTimestamp() });
+                window.appState.isAdding = false; render();
+            },
+
+            // Travel Prep
+            setPrepTab: (tab) => { window.appState.prepTab = tab; render(); },
+            addPrep: async () => {
+                const v = document.getElementById('prep-in').value;
+                if(!v) return;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'travels', window.appState.currentTravel.id, 'prep'), { text: v, type: window.appState.prepTab || 'todo', creator: window.appState.activeUser, done: false, createdAt: serverTimestamp() });
+            },
+            togglePrep: async (id, done) => { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'travels', window.appState.currentTravel.id, 'prep', id), { done }); },
+
+            // Settings
+            saveSettings: async () => {
+                const yu = document.getElementById('set-yu').value || '🐶';
+                const cheuk = document.getElementById('set-cheuk').value || '🦊';
+                const newSettings = { ...window.appState.globalSettings, avatars: { Yu: yu, Cheuk: cheuk } };
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), newSettings);
+                window.appState.globalSettings = newSettings;
+                window.setView('dashboard');
+            }
+        };
+
+        // --- View Renderers ---
+        function renderLoginView() {
+            const av = window.appState.globalSettings.avatars;
+            return `
+                <div class="flex-1 flex flex-col items-center justify-center p-8 text-center h-full">
+                    <div class="text-7xl mb-12 animate-float">❤️</div>
+                    <div class="grid grid-cols-2 gap-8 w-full">
+                        ${['Yu', 'Cheuk'].map(name => `
+                            <button onclick="actions.login('${name}')" class="bg-white border-4 border-slate-800 p-8 rounded-[40px] shadow-[8px_8px_0px_0px_rgba(30,41,59,1)] flex flex-col items-center gap-4 active:scale-95 transition-transform">
+                                <span class="text-6xl">${av[name] || (name==='Yu'?'🐶':'🦊')}</span>
+                                <span class="font-black text-xl">${name}</span>
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderDashboardView() {
+            const user = window.appState.activeUser;
+            const av = window.appState.globalSettings.avatars;
+            const days = calculateDays(START_DATE);
+            
+            return `
+                <div class="p-6">
+                    <div class="flex justify-between items-center mb-8">
+                        <div class="flex items-center gap-3">
+                            <div class="text-3xl bg-white p-2 rounded-2xl border-2 border-slate-800">${av[user]}</div>
+                            <h2 class="font-black text-lg">嗨，${user}！今日點啊？</h2>
+                        </div>
+                        <button onclick="setView('settings')" class="p-3 bg-white border-4 border-slate-800 rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] active:scale-95 transition-transform"><i data-lucide="settings" width="20"></i></button>
+                    </div>
+
+                    <div class="bg-white border-4 border-slate-800 rounded-[32px] p-8 mb-8 shadow-[10px_10px_0px_0px_rgba(30,41,59,1)] text-center relative overflow-hidden">
+                        <div class="absolute top-0 left-0 w-full h-2 bg-pink-300"></div>
+                        <p class="text-slate-400 font-bold text-sm mb-2">我哋已經一齊咗</p>
+                        <div class="text-6xl font-black text-pink-500 mb-2">${days} <span class="text-xl text-slate-800">日</span></div>
+                        <p class="text-[10px] font-bold text-slate-300">SINCE 2025.07.06 🍯</p>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        ${renderDashCard('todo', 'CheckCircle2', 'To-Do List', '代辦事項', 'bg-green-100')}
+                        ${renderDashCard('money', 'Wallet', '記帳', 'Money', 'bg-amber-100')}
+                        ${renderDashCard('anniversary', 'Heart', '紀念日', 'Anniversary', 'bg-red-100')}
+                        ${renderDashCard('eat', 'Utensils', '食乜好', 'Eat Wheel', 'bg-orange-100')}
+                        ${renderDashCard('travel', 'Plane', '去旅行', 'Travel Planner', 'bg-blue-200 col-span-2')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderDashCard(view, icon, label, sub, color) {
+            return `
+                <button onclick="setView('${view}')" class="${color} border-4 border-slate-800 p-5 rounded-3xl shadow-[5px_5px_0px_0px_rgba(30,41,59,1)] flex flex-col items-start text-left gap-2 active:scale-95 transition-transform">
+                    <div class="bg-white p-2 rounded-xl border-2 border-slate-800"><i data-lucide="${icon.toLowerCase()}"></i></div>
+                    <div>
+                        <div class="font-black text-sm">${label}</div>
+                        <div class="text-[9px] font-bold opacity-40 uppercase">${sub}</div>
+                    </div>
+                </button>
+            `;
+        }
+
+        function renderTodoView() {
+            const tab = window.appState.todoTab;
+            const items = window.appState.todos.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+            const av = window.appState.globalSettings.avatars;
+            const editingId = window.appState.editingTodoId;
+
+            let listHtml = '';
+            if (tab === 'todo') {
+                listHtml = items.filter(i => i.type === 'todo').map(i => renderTodoItem(i, av, editingId)).join('');
+            } else {
+                listHtml = ['Yu', 'Cheuk'].map(p => `
+                    <div class="mb-6">
+                        <h3 class="font-black text-sm mb-3 flex items-center gap-2">
+                            <span class="text-2xl">${av[p]}</span> ${p} 想要嘅禮物🎁
+                        </h3>
+                        ${items.filter(i => i.type === 'gift' && i.creator === p).map(i => renderTodoItem(i, av, editingId)).join('')}
+                    </div>
+                `).join('');
+            }
+
+            return `
+                <div class="p-6 flex flex-col h-full max-h-screen overflow-hidden">
+                    <div class="flex items-center gap-4 mb-8 flex-shrink-0">
+                        <button onclick="setView('dashboard')" class="p-2 bg-white border-2 border-slate-800 rounded-full"><i data-lucide="arrow-left"></i></button>
+                        <h2 class="text-2xl font-black">To-Do List 📝</h2>
+                    </div>
+
+                    <div class="flex bg-white p-1 rounded-2xl border-4 border-slate-800 mb-6 flex-shrink-0">
+                        <button onclick="actions.setTodoTab('todo')" class="flex-1 py-3 rounded-xl font-black text-sm ${tab === 'todo' ? 'bg-blue-400 text-white' : ''}">一齊做</button>
+                        <button onclick="actions.setTodoTab('gift')" class="flex-1 py-3 rounded-xl font-black text-sm ${tab === 'gift' ? 'bg-pink-400 text-white' : ''}">禮物願望</button>
+                    </div>
+
+                    <div class="flex gap-2 mb-6 flex-shrink-0">
+                        <input id="todo-input" placeholder="諗到咩就加低佢..." class="flex-1 p-4 border-4 border-slate-800 rounded-2xl font-bold outline-none" />
+                        <button onclick="actions.addTodo()" class="bg-slate-800 text-white p-4 rounded-2xl active:scale-95 transition-transform"><i data-lucide="plus"></i></button>
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto pr-1 pb-20 no-scrollbar">
+                        ${listHtml}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderTodoItem(item, av, editingId) {
+            if (editingId === item.id) {
+                return `
+                    <div class="bg-white border-4 border-slate-800 p-4 rounded-2xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex items-center gap-2 mb-3">
+                        <input id="edit-todo-${item.id}" value="${item.text}" class="flex-1 p-2 border-2 border-slate-800 rounded-xl outline-none" autofocus/>
+                        <button onclick="actions.saveEditTodo('${item.id}')" class="p-2 bg-green-400 text-white rounded-xl border-2 border-slate-800"><i data-lucide="check" width="16" height="16"></i></button>
+                        <button onclick="actions.cancelEditTodo()" class="p-2 bg-slate-200 rounded-xl border-2 border-slate-800"><i data-lucide="x" width="16" height="16"></i></button>
+                    </div>
+                `;
+            }
+            return `
+                <div class="bg-white border-4 border-slate-800 p-4 rounded-2xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex items-center justify-between mb-3">
+                    <div class="flex items-center gap-3 flex-1 overflow-hidden">
+                        <button onclick="actions.toggleTodo('${item.id}', ${!item.done})" class="min-w-[24px] h-6 border-2 border-slate-800 rounded flex items-center justify-center ${item.done ? 'bg-green-400' : ''}">
+                            ${item.done ? '<i data-lucide="check" class="text-white" width="14" height="14"></i>' : ''}
+                        </button>
+                        <span class="font-bold truncate ${item.done ? 'line-through text-slate-300' : ''}">${item.text}</span>
+                    </div>
+                    <div class="flex items-center gap-2 ml-2">
+                        <span class="text-xl">${av[item.creator]}</span>
+                        <button onclick="actions.startEditTodo('${item.id}')" class="text-slate-400 hover:text-blue-500"><i data-lucide="edit-3" width="16" height="16"></i></button>
+                        <button onclick="actions.delTodo('${item.id}')" class="text-slate-400 hover:text-red-500"><i data-lucide="trash-2" width="16" height="16"></i></button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderMoneyView() {
+            const tab = window.appState.moneyTab;
+            const monthStr = window.appState.moneyMonth;
+            const expenses = window.appState.expenses;
+            const av = window.appState.globalSettings.avatars;
+            const monthExpenses = expenses.filter(e => e.date && e.date.startsWith(monthStr)).sort((a,b) => new Date(b.date) - new Date(a.date));
+            const totalSpent = monthExpenses.reduce((acc, curr) => acc + (curr.type === 'expense' ? curr.amount : 0), 0);
+            const totalIncome = monthExpenses.reduce((acc, curr) => acc + (curr.type === 'income' ? curr.amount : 0), 0);
+
+            let contentHtml = '';
+            if (tab === 'history') {
+                contentHtml = `
+                    <div class="flex justify-between items-center mb-4 bg-white p-3 rounded-2xl border-4 border-slate-800 flex-shrink-0">
+                        <span class="font-bold text-sm">月份</span>
+                        <input type="month" value="${monthStr}" onchange="actions.setMoneyMonth(event)" class="font-black bg-slate-100 p-2 rounded-lg outline-none" />
+                    </div>
+                    <div class="flex gap-4 mb-4 flex-shrink-0">
+                        <div class="flex-1 bg-red-50 p-4 rounded-2xl border-2 border-red-200">
+                            <div class="text-[10px] text-red-400 font-bold mb-1">支出</div>
+                            <div class="text-xl font-black text-red-600">$${totalSpent}</div>
+                        </div>
+                        <div class="flex-1 bg-green-50 p-4 rounded-2xl border-2 border-green-200">
+                            <div class="text-[10px] text-green-400 font-bold mb-1">收入</div>
+                            <div class="text-xl font-black text-green-600">$${totalIncome}</div>
+                        </div>
+                    </div>
+                    <div class="flex-1 overflow-y-auto space-y-3 pr-1 pb-10 no-scrollbar">
+                        ${monthExpenses.length === 0 ? '<p class="text-center text-slate-400 font-bold mt-10">呢個月仲未有紀錄喎 ✍️</p>' : ''}
+                        ${monthExpenses.map(e => `
+                            <div class="bg-white border-4 border-slate-800 p-4 rounded-2xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col gap-2">
+                                <div class="flex justify-between items-start">
+                                    <div class="flex items-center gap-3">
+                                        <span class="text-2xl">${av[e.payer]}</span>
+                                        <div>
+                                            <div class="text-sm font-black">${e.note || e.cat}</div>
+                                            <div class="text-[10px] text-slate-400">${e.cat} • ${new Date(e.date).toLocaleDateString()}</div>
+                                        </div>
+                                    </div>
+                                    <div class="font-black text-lg ${e.type === 'income' ? 'text-green-500' : 'text-slate-800'}">
+                                        ${e.type === 'income' ? '+' : '-'}$${e.amount}
+                                    </div>
+                                </div>
+                                <div class="flex justify-end gap-2 mt-2 border-t-2 border-dashed border-slate-100 pt-2">
+                                    <button onclick="actions.editExpense('${e.id}')" class="text-slate-400 hover:text-blue-500 text-xs flex items-center gap-1"><i data-lucide="edit-3" width="12"></i> 改</button>
+                                    <button onclick="actions.delExpense('${e.id}')" class="text-slate-400 hover:text-red-500 text-xs flex items-center gap-1"><i data-lucide="trash-2" width="12"></i> 刪</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } else if (tab === 'add') {
+                const init = window.appState.editingExpense || { type: 'expense', amount: '', cat: '飲食 🍲', note: '' };
+                const cats = init.type === 'expense' ? EXPENSE_CATS : INCOME_CATS;
+                // Add expense form requires maintaining state of type/cat in DOM temporarily or passing via args
+                // For simplicity in vanilla, we will re-render if type changes to show different cats
+                window._tempExpType = window._tempExpType || init.type;
+                window._tempExpCat = window._tempExpCat || init.cat;
+                
+                contentHtml = `
+                    <div class="space-y-4">
+                        <div class="flex justify-between items-center">
+                            <h3 class="font-black text-lg">${window.appState.editingExpense ? '修改紀錄' : '新增紀錄'}</h3>
+                            ${window.appState.editingExpense ? `<button onclick="actions.setMoneyTab('history')" class="text-slate-400"><i data-lucide="x"></i></button>` : ''}
+                        </div>
+                        <div class="flex border-4 border-slate-800 rounded-2xl overflow-hidden">
+                            <button onclick="window._tempExpType='expense'; window._tempExpCat='飲食 🍲'; render();" class="flex-1 py-3 font-black ${window._tempExpType === 'expense' ? 'bg-red-400 text-white' : 'bg-white'}">支出</button>
+                            <button onclick="window._tempExpType='income'; window._tempExpCat='人工 💰'; render();" class="flex-1 py-3 font-black ${window._tempExpType === 'income' ? 'bg-green-400 text-white' : 'bg-white'}">收入</button>
+                        </div>
+                        <input id="exp-amount" type="number" value="${init.amount}" placeholder="0.00" class="w-full text-5xl font-black p-4 border-b-4 border-slate-200 outline-none text-center bg-transparent" />
+                        <div class="flex flex-wrap gap-2">
+                            <input type="hidden" id="exp-cat" value="${window._tempExpCat}">
+                            ${(window._tempExpType === 'expense' ? EXPENSE_CATS : INCOME_CATS).map(c => `
+                                <button onclick="window._tempExpCat='${c}'; render();" class="px-4 py-2 border-2 border-slate-800 rounded-full font-bold text-xs ${window._tempExpCat === c ? 'bg-yellow-300' : 'bg-white'}">${c}</button>
+                            `).join('')}
+                        </div>
+                        <input id="exp-note" value="${init.note}" placeholder="備註寫低啲乜..." class="w-full p-4 border-2 border-slate-800 rounded-2xl font-bold bg-white" />
+                        <button onclick="actions.saveExpense('${window._tempExpType}')" class="w-full py-5 bg-slate-800 text-white rounded-[24px] font-black text-xl shadow-[6px_6px_0px_0px_rgba(30,41,59,0.3)] active:scale-95 transition-transform">搞掂 ✨</button>
+                    </div>
+                `;
+            } else if (tab === 'piggy') {
+                const logs = window.appState.piggyLogs.sort((a,b) => new Date(b.date) - new Date(a.date));
+                const total = logs.reduce((acc, curr) => acc + (curr.type === 'in' ? curr.amount : -curr.amount), 0);
+                contentHtml = `
+                    <div class="flex flex-col gap-6">
+                        <div class="text-center mt-4">
+                            <div class="text-8xl mb-4 animate-pulse-scale">🐷</div>
+                            <div class="text-4xl font-black text-pink-500">$${total}</div>
+                            <p class="text-xs font-bold text-slate-400 mt-2">一齊入錢去旅行！✈️</p>
+                        </div>
+                        <div class="bg-white border-4 border-slate-800 p-6 rounded-[32px] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                            <input id="piggy-amount" type="number" placeholder="入幾多錢？" class="w-full p-4 border-2 border-slate-800 rounded-2xl mb-4 font-black bg-slate-50 outline-none" />
+                            <div class="flex gap-2">
+                                <button onclick="actions.addPiggy('in')" class="flex-1 py-4 bg-green-400 text-white border-2 border-slate-800 rounded-2xl font-black active:scale-95">入錢</button>
+                                <button onclick="actions.addPiggy('out')" class="flex-1 py-4 bg-red-400 text-white border-2 border-slate-800 rounded-2xl font-black active:scale-95">拎錢</button>
+                            </div>
+                        </div>
+                        <div class="space-y-2 max-h-40 overflow-y-auto pr-1 pb-4 no-scrollbar">
+                            ${logs.map(l => `
+                                <div class="flex justify-between items-center text-xs font-bold bg-white p-3 border-2 border-slate-800 rounded-xl">
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-xl">${av[l.user]}</span>
+                                        <span class="${l.type === 'in' ? 'text-green-500' : 'text-red-500'}">${l.type === 'in' ? '入咗' : '拎咗'}</span>
+                                    </div>
+                                    <span class="text-sm">$${l.amount}</span>
+                                    <button onclick="actions.delPiggy('${l.id}')" class="text-slate-400"><i data-lucide="trash-2" width="14"></i></button>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="p-6 h-full flex flex-col max-h-screen overflow-hidden">
+                    <div class="flex items-center gap-4 mb-6 flex-shrink-0">
+                        <button onclick="setView('dashboard')" class="p-2 bg-white border-2 border-slate-800 rounded-full"><i data-lucide="arrow-left"></i></button>
+                        <h2 class="text-2xl font-black">記帳 💰</h2>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 mb-6 flex-shrink-0">
+                        ${['history', 'add', 'piggy'].map(t => `
+                            <button onclick="actions.setMoneyTab('${t}')" class="py-2 rounded-xl border-2 border-slate-800 font-black text-xs ${tab === t ? 'bg-slate-800 text-white' : 'bg-white'}">
+                                ${t === 'history' ? '歷史' : t === 'add' ? '記帳' : '豬仔錢罌'}
+                            </button>
+                        `).join('')}
+                    </div>
+                    ${contentHtml}
+                </div>
+            `;
+        }
+
+        function renderAnniversaryView() {
+            const list = [];
+            const today = new Date();
+            const startYear = START_DATE.getFullYear();
+            const curYear = today.getFullYear();
+            
+            for (let i = 0; i <= 10; i++) {
+                const targetYear = startYear + i;
+                if (i > 0) list.push({ name: `${i}週年紀念日`, date: new Date(targetYear, 6, 6), icon: ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'][i-1] || '💖' });
+                
+                const vDate = new Date(targetYear, 1, 14);
+                if (vDate > START_DATE) list.push({ name: `我哋第${targetYear - startYear + (START_DATE.getMonth() < 1 ? 1 : 0)}個情人節`, date: vDate, icon: '🌹' });
+                
+                const xDate = new Date(targetYear, 11, 25);
+                if (xDate > START_DATE) list.push({ name: `我哋第${targetYear - startYear + (START_DATE.getMonth() < 11 ? 1 : 0)}個聖誕節`, date: xDate, icon: '🎄' });
+                
+                const fDate = new Date(targetYear, 4, 20);
+                if (fDate > START_DATE) {
+                    let nth = targetYear - startYear + (START_DATE.getMonth() < 4 ? 1 : 0);
+                    list.push({ name: nth === 1 ? '1st 520' : `${nth}th 520`, date: fDate, icon: '💘' });
+                }
+                
+                list.push({ name: `Yu ${targetYear - 2004}歲生日🎂`, date: new Date(targetYear, 11, 20), icon: '🎂' });
+                list.push({ name: `Cheuk ${targetYear - 2004}歲生日🎂`, date: new Date(targetYear, 11, 4), icon: '🎂' });
+            }
+
+            list.sort((a, b) => a.date - b.date);
+            const past = list.filter(e => e.date < new Date(today.getFullYear(), today.getMonth(), today.getDate())).reverse();
+            const future = list.filter(e => e.date >= new Date(today.getFullYear(), today.getMonth(), today.getDate()));
+
+            return `
+                <div class="p-6 h-full flex flex-col max-h-screen overflow-hidden">
+                    <div class="flex items-center gap-4 mb-6 flex-shrink-0">
+                        <button onclick="setView('dashboard')" class="p-2 bg-white border-2 border-slate-800 rounded-full"><i data-lucide="arrow-left"></i></button>
+                        <h2 class="text-2xl font-black">重要日子 📅</h2>
+                    </div>
+                    
+                    <div class="flex-1 overflow-y-auto space-y-8 pr-1 pb-10 no-scrollbar">
+                        <div>
+                            <h3 class="font-black text-lg mb-4 text-blue-500">嚟緊嘅大日子 🎈</h3>
+                            <div class="space-y-4">
+                                ${future.slice(0, 10).map(e => `
+                                    <div class="bg-white border-4 border-slate-800 p-5 rounded-[28px] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex justify-between items-center">
+                                        <div class="flex items-center gap-3">
+                                            <span class="text-3xl">${e.icon}</span>
+                                            <div>
+                                                <div class="text-[10px] font-black text-slate-400">${e.date.toLocaleDateString()}</div>
+                                                <div class="font-black text-slate-800">${e.name}</div>
+                                            </div>
+                                        </div>
+                                        <div class="text-right">
+                                            <div class="text-[9px] font-bold text-pink-400">仲有</div>
+                                            <div class="text-xl font-black text-pink-500">${Math.ceil((e.date - new Date()) / (1000*60*60*24))}日</div>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <div>
+                            <h3 class="font-black text-lg mb-4 text-slate-400">過咗去嘅回憶 🕰️</h3>
+                            <div class="space-y-3 opacity-70">
+                                ${past.slice(0, 10).map(e => `
+                                    <div class="bg-slate-50 border-2 border-slate-300 p-3 rounded-2xl flex justify-between items-center">
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-xl">${e.icon}</span>
+                                            <div>
+                                                <div class="text-[9px] font-black text-slate-400">${e.date.toLocaleDateString()}</div>
+                                                <div class="font-bold text-sm text-slate-600">${e.name}</div>
+                                            </div>
+                                        </div>
+                                        <div class="text-xs font-bold text-slate-400">已過去</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderEatView() {
+            return `
+                <div class="p-6 h-full flex flex-col items-center">
+                    <div class="flex items-center gap-4 mb-12 w-full">
+                        <button onclick="setView('dashboard')" class="p-2 bg-white border-2 border-slate-800 rounded-full"><i data-lucide="arrow-left"></i></button>
+                        <h2 class="text-2xl font-black">食乜好 🍜</h2>
+                    </div>
+                    <div class="relative mb-12">
+                        <div id="eat-wheel" class="w-64 h-64 rounded-full border-8 border-slate-800 bg-white flex items-center justify-center text-7xl shadow-[0px_10px_0px_0px_rgba(0,0,0,1)]">🍱</div>
+                        <div class="absolute -top-4 left-1/2 -translate-x-1/2 text-4xl">▼</div>
+                    </div>
+                    <div id="eat-result" class="text-center mb-10 h-20"></div>
+                    <button onclick="actions.spinEat()" class="w-full py-6 bg-yellow-400 border-4 border-slate-800 rounded-3xl font-black text-2xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] active:scale-95 transition-transform mt-auto mb-10">轉啦！🎲</button>
+                </div>
+            `;
+        }
+
+        function renderTravelListView() {
+            const travels = window.appState.travels.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+            const isAdding = window.appState.isAdding;
+
+            let addModal = isAdding ? `
+                <div class="fixed inset-0 bg-black/60 z-[100] flex items-end p-4">
+                    <div class="bg-white w-full rounded-[40px] border-4 border-slate-800 p-8 space-y-4 animate-[transform_0.3s_ease-out]">
+                        <h3 class="font-black text-xl mb-4">開新旅程 ✨</h3>
+                        <input id="t-title" placeholder="旅程叫咩名？" class="w-full p-4 border-4 border-slate-800 rounded-2xl font-bold outline-none" />
+                        <div class="flex gap-2">
+                            <input id="t-start" type="date" class="flex-1 p-3 border-2 border-slate-800 rounded-xl text-xs font-bold" />
+                            <input id="t-end" type="date" class="flex-1 p-3 border-2 border-slate-800 rounded-xl text-xs font-bold" />
+                        </div>
+                        <div class="flex gap-2">
+                            <select id="t-country" onchange="actions.updateCountryForm(event)" class="flex-1 p-3 border-2 border-slate-800 rounded-xl text-xs font-bold bg-white">
+                                ${COUNTRIES.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+                            </select>
+                            <select id="t-city" data-currency="JPY" class="flex-1 p-3 border-2 border-slate-800 rounded-xl text-xs font-bold bg-white">
+                                ${COUNTRIES[0].cities.map(c => `<option value="${c}">${c}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="flex gap-2 pt-2">
+                            <button onclick="actions.toggleAddTravel(false)" class="flex-1 py-4 bg-slate-100 rounded-2xl font-bold active:bg-slate-200">取消</button>
+                            <button onclick="actions.saveTravel()" class="flex-1 py-4 bg-blue-400 text-white border-2 border-slate-800 rounded-2xl font-black active:scale-95">起飛啦！🛫</button>
+                        </div>
+                    </div>
+                </div>
+            ` : '';
+
+            return `
+                <div class="p-6 h-full flex flex-col max-h-screen overflow-hidden">
+                    <div class="flex justify-between items-center mb-8 flex-shrink-0">
+                        <div class="flex items-center gap-4">
+                            <button onclick="setView('dashboard')" class="p-2 bg-white border-2 border-slate-800 rounded-full"><i data-lucide="arrow-left"></i></button>
+                            <h2 class="text-2xl font-black">去旅行 ✈️</h2>
+                        </div>
+                        <button onclick="actions.toggleAddTravel(true)" class="p-3 bg-blue-400 text-white border-4 border-slate-800 rounded-2xl active:scale-95 transition-transform"><i data-lucide="plus"></i></button>
+                    </div>
+
+                    ${addModal}
+
+                    <div class="flex-1 overflow-y-auto space-y-4 pr-1 pb-10 no-scrollbar">
+                        ${travels.map(t => {
+                            const daysDiff = Math.ceil((new Date(t.startDate) - new Date()) / (1000*60*60*24));
+                            const isOngoing = daysDiff <= 0 && new Date(t.endDate) >= new Date();
+                            // Fix JSON stringify quotes for HTML attribute
+                            const tJson = JSON.stringify(t).replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+                            return `
+                                <div onclick="setView('travel-detail', ${tJson})" class="bg-white border-4 border-slate-800 p-5 rounded-[32px] shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] flex flex-col group cursor-pointer hover:-translate-y-1 transition-transform">
+                                    <div class="flex justify-between items-start mb-2">
+                                        <div>
+                                            <div class="text-[10px] font-black text-slate-300">${t.startDate} ✈️ ${t.endDate}</div>
+                                            <div class="text-xl font-black">${t.title}</div>
+                                        </div>
+                                        ${daysDiff > 0 ? `<span class="bg-blue-100 text-blue-600 px-2 py-1 rounded-lg text-xs font-black">倒數 ${daysDiff} 日</span>` : ''}
+                                        ${isOngoing ? `<span class="bg-green-100 text-green-600 px-2 py-1 rounded-lg text-xs font-black">進行中 ✨</span>` : ''}
+                                    </div>
+                                    <div class="flex justify-between items-center mt-2 border-t-2 border-dashed border-slate-100 pt-2">
+                                        <div class="text-xs font-bold text-blue-400">📍 ${t.country} · ${t.city}</div>
+                                        <button onclick="actions.delTravel('${t.id}', event)" class="text-slate-300 hover:text-red-500 z-10 relative"><i data-lucide="trash-2" width="16"></i></button>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // TRAVEL DETAIL VIEWS
+        function renderTravelDetailView() {
+            const travel = window.appState.currentTravel;
+            if(!travel) return '';
+            const tab = window.appState.travelTab;
+            
+            let contentHtml = '';
+            if(tab === 'itinerary') contentHtml = renderItinerary(travel);
+            else if(tab === 'booking') contentHtml = renderBooking(travel);
+            else if(tab === 'money') contentHtml = renderTravelMoney(travel);
+            else if(tab === 'prep') contentHtml = renderTravelPrep(travel);
+
+            const tabs = [
+                { id: 'itinerary', label: '行程', icon: 'map' },
+                { id: 'booking', label: '預訂', icon: 'ticket' },
+                { id: 'money', label: '記帳', icon: 'globe' },
+                { id: 'prep', label: '準備', icon: 'briefcase' }
+            ];
+
+            return `
+                <div class="h-screen flex flex-col bg-white overflow-hidden w-full">
+                    <div class="p-6 bg-blue-50 border-b-4 border-slate-800 pb-4 flex-shrink-0">
+                        <div class="flex items-center justify-between mb-2">
+                            <button onclick="setView('travel')" class="p-2 bg-white border-2 border-slate-800 rounded-full"><i data-lucide="arrow-left" width="16"></i></button>
+                            <div class="font-black text-xs text-slate-500">${travel.startDate} 至 ${travel.endDate}</div>
+                        </div>
+                        <h2 class="text-2xl font-black">${travel.title}</h2>
+                        <p class="text-xs font-bold text-blue-500">📍 ${travel.country} · ${travel.city}</p>
+                    </div>
+
+                    <div class="flex border-b-4 border-slate-800 overflow-x-auto no-scrollbar bg-slate-50 flex-shrink-0">
+                        ${tabs.map(t => `
+                            <button onclick="actions.setTravelTab('${t.id}')" class="px-5 py-3 font-black text-xs flex items-center gap-2 transition-all flex-shrink-0 ${tab === t.id ? 'bg-blue-400 text-white border-b-4 border-blue-600' : 'text-slate-500'}">
+                                <i data-lucide="${t.icon}" width="14"></i> ${t.label}
+                            </button>
+                        `).join('')}
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto bg-[#F8FAFC] no-scrollbar">
+                        ${contentHtml}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderItinerary(travel) {
+            const dates = generateDates(travel.startDate, travel.endDate);
+            const selDate = window.appState.travelSelDate || travel.startDate;
+            const items = window.appState.travelData.itinerary.sort((a,b) => a.time.localeCompare(b.time));
+            const dailyItems = items.filter(i => i.date === selDate);
+            const weather = getMockWeather(selDate, travel.city);
+            const CAT_COLORS = { '景點': 'bg-blue-400', '美食': 'bg-orange-400', '交通': 'bg-purple-400', '住宿': 'bg-pink-400' };
+            const isAdding = window.appState.isAdding;
+
+            window._tempItinCat = window._tempItinCat || '景點';
+
+            return `
+                <div class="flex flex-col h-full">
+                    <div class="flex gap-2 p-4 overflow-x-auto no-scrollbar border-b-2 border-slate-200 bg-white flex-shrink-0">
+                        ${dates.map((d, i) => {
+                            const dStr = d.toISOString().split('T')[0];
+                            const isSel = selDate === dStr;
+                            return `
+                                <button onclick="actions.setTravelDate('${dStr}')" class="flex-shrink-0 px-4 py-2 rounded-xl border-2 border-slate-800 font-black text-xs text-center ${isSel ? 'bg-slate-800 text-white' : 'bg-white'}">
+                                    <div>Day ${i+1}</div>
+                                    <div class="${isSel ? 'text-blue-200' : 'text-slate-400'}">${d.getDate()}/${d.getMonth()+1}</div>
+                                </button>
+                            `;
+                        }).join('')}
+                    </div>
+
+                    <div class="p-6 flex-1 overflow-y-auto pb-20 no-scrollbar">
+                        <div class="flex justify-between items-center bg-white p-3 rounded-2xl border-2 border-slate-800 mb-6 shadow-sm">
+                            <span class="font-black text-sm">${selDate} 嘅行程</span>
+                            <span class="text-sm font-bold bg-blue-50 px-2 py-1 rounded-lg text-blue-600">${weather}</span>
+                        </div>
+                        
+                        <div class="relative pl-6 border-l-4 border-slate-300 space-y-6">
+                            ${dailyItems.map(item => `
+                                <div class="relative">
+                                    <div class="absolute -left-[34px] top-1 w-4 h-4 rounded-full border-2 border-white ${CAT_COLORS[item.cat] || 'bg-slate-400'}"></div>
+                                    <div class="bg-white border-2 border-slate-800 p-4 rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
+                                        <div class="flex justify-between items-start mb-2">
+                                            <div>
+                                                <div class="text-[10px] font-black text-slate-400 mb-1 flex gap-2">
+                                                    <span class="bg-slate-100 px-1 rounded">${item.time}</span>
+                                                    <span class="${CAT_COLORS[item.cat]} text-white px-1 rounded">${item.cat}</span>
+                                                </div>
+                                                <div class="font-black text-lg">${item.place}</div>
+                                            </div>
+                                            <button onclick="actions.delItin('${item.id}')" class="text-slate-300 hover:text-red-500"><i data-lucide="trash-2" width="14"></i></button>
+                                        </div>
+                                        ${item.note ? `<div class="text-xs text-slate-500 font-bold bg-slate-50 p-2 rounded-lg mt-2">📝 ${item.note}</div>` : ''}
+                                    </div>
+                                </div>
+                            `).join('')}
+                            ${dailyItems.length === 0 && !isAdding ? `<div class="text-sm font-bold text-slate-400 py-4">未編行程喎，撳下面加啦！</div>` : ''}
+                        </div>
+
+                        ${isAdding ? `
+                            <div class="bg-white border-2 border-slate-800 p-4 rounded-2xl space-y-3 mt-6">
+                                <h4 class="font-black text-sm mb-2">加行程</h4>
+                                <div class="flex gap-2">
+                                    <input id="i-time" type="time" value="10:00" class="p-2 border-2 border-slate-800 rounded-xl font-bold w-1/3 outline-none" />
+                                    <input id="i-place" placeholder="去邊度？" class="p-2 border-2 border-slate-800 rounded-xl font-bold flex-1 outline-none" />
+                                </div>
+                                <div class="flex gap-2">
+                                    <input type="hidden" id="i-cat" value="${window._tempItinCat}">
+                                    ${['景點', '美食', '交通', '住宿'].map(c => `
+                                        <button onclick="window._tempItinCat='${c}'; render();" class="flex-1 py-1 text-[10px] border-2 border-slate-800 rounded-lg font-bold ${window._tempItinCat === c ? CAT_COLORS[c] + ' text-white' : 'bg-white'}">${c}</button>
+                                    `).join('')}
+                                </div>
+                                <input id="i-note" placeholder="備註 (Optional)" class="w-full p-2 border-2 border-slate-800 rounded-xl font-bold text-xs outline-none" />
+                                <div class="flex gap-2 pt-2">
+                                    <button onclick="actions.toggleAddItin(false)" class="flex-1 py-2 bg-slate-100 rounded-xl font-bold text-xs">取消</button>
+                                    <button onclick="actions.addItin()" class="flex-1 py-2 bg-slate-800 text-white rounded-xl font-bold text-xs">加低佢</button>
+                                </div>
+                            </div>
+                        ` : `
+                            <button onclick="actions.toggleAddItin(true)" class="w-full py-4 mt-6 border-2 border-dashed border-slate-400 rounded-2xl text-slate-500 font-bold text-sm bg-white hover:bg-slate-50 active:scale-95 transition-transform">+ 加入行程</button>
+                        `}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderBooking(travel) {
+            const flights = window.appState.travelData.flights;
+            const hotels = window.appState.travelData.hotels;
+            const receipts = window.appState.travelData.receipts;
+            const isAdding = window.appState.isAdding;
+            const sec = window.appState.addSection;
+
+            return `
+                <div class="p-6 space-y-8 h-full overflow-y-auto pb-20 no-scrollbar">
+                    <section>
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="font-black text-lg flex items-center gap-2"><i data-lucide="plane" width="20"></i> 機票資料</h3>
+                            <button onclick="actions.toggleAddSection('flight', true)" class="text-blue-500 font-bold text-xs bg-white border-2 border-blue-100 px-3 py-1 rounded-full">+ 新增</button>
+                        </div>
+                        ${isAdding && sec === 'flight' ? `
+                            <div class="bg-white border-2 border-slate-800 p-4 rounded-2xl space-y-2 mb-4 shadow-sm">
+                                <input id="f-no" placeholder="航班編號 (例: CX504)" class="w-full p-2 border-2 border-slate-200 rounded-lg text-sm font-bold outline-none"/>
+                                <div class="flex gap-2">
+                                    <input id="f-from" placeholder="出發" value="HKG" class="w-1/2 p-2 border-2 border-slate-200 rounded-lg text-sm outline-none"/>
+                                    <input id="f-to" placeholder="抵達" value="${travel.city}" class="w-1/2 p-2 border-2 border-slate-200 rounded-lg text-sm outline-none"/>
+                                </div>
+                                <div class="flex gap-2">
+                                    <input id="f-time" type="time" class="flex-1 p-2 border-2 border-slate-200 rounded-lg text-sm outline-none"/>
+                                    <input id="f-gate" placeholder="閘口" class="flex-1 p-2 border-2 border-slate-200 rounded-lg text-sm outline-none"/>
+                                </div>
+                                <div class="flex gap-2 pt-2">
+                                    <button onclick="actions.toggleAddSection(null, false)" class="flex-1 py-2 bg-slate-100 rounded-lg text-xs font-bold">取消</button>
+                                    <button onclick="actions.addFlight()" class="flex-1 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold">儲存</button>
+                                </div>
+                            </div>
+                        ` : ''}
+                        <div class="space-y-3">
+                            ${flights.map(f => `
+                                <div class="bg-blue-600 text-white p-5 rounded-[24px] border-2 border-blue-800 shadow-[4px_4px_0px_0px_rgba(30,41,59,1)] relative overflow-hidden">
+                                    <div class="flex justify-between items-center mb-4">
+                                        <div class="font-black text-xl">${f.no}</div>
+                                        <button onclick="actions.delDoc('flights', '${f.id}')" class="text-blue-200 hover:text-white"><i data-lucide="trash-2" width="16"></i></button>
+                                    </div>
+                                    <div class="flex justify-between items-center border-t border-dashed border-blue-400 pt-4">
+                                        <div class="text-center flex-1">
+                                            <div class="text-[10px] opacity-60">FROM</div>
+                                            <div class="text-xl font-black">${f.from}</div>
+                                        </div>
+                                        <i data-lucide="plane" width="16" class="text-blue-200 rotate-90 mx-4"></i>
+                                        <div class="text-center flex-1">
+                                            <div class="text-[10px] opacity-60">TO</div>
+                                            <div class="text-xl font-black">${f.to}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </section>
+
+                    <section>
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="font-black text-lg flex items-center gap-2"><i data-lucide="hotel" width="20"></i> 住宿資料</h3>
+                            <button onclick="actions.toggleAddSection('hotel', true)" class="text-pink-500 font-bold text-xs bg-white border-2 border-pink-100 px-3 py-1 rounded-full">+ 新增</button>
+                        </div>
+                        ${isAdding && sec === 'hotel' ? `
+                            <div class="bg-white border-2 border-slate-800 p-4 rounded-2xl space-y-3 mb-4 shadow-sm">
+                                <input id="h-name" placeholder="酒店名稱" class="w-full p-2 border-2 border-slate-200 rounded-lg text-sm font-bold outline-none"/>
+                                <div class="flex gap-2">
+                                    <div class="flex-1">
+                                        <label class="text-[10px] font-bold text-slate-400">CHECK-IN</label>
+                                        <input id="h-in" type="datetime-local" class="w-full p-2 border-2 border-slate-200 rounded-lg text-xs outline-none"/>
+                                    </div>
+                                    <div class="flex-1">
+                                        <label class="text-[10px] font-bold text-slate-400">CHECK-OUT</label>
+                                        <input id="h-out" type="datetime-local" class="w-full p-2 border-2 border-slate-200 rounded-lg text-xs outline-none"/>
+                                    </div>
+                                </div>
+                                <input id="h-phone" placeholder="聯絡電話" class="w-full p-2 border-2 border-slate-200 rounded-lg text-sm outline-none"/>
+                                <input id="h-add" placeholder="酒店地址" class="w-full p-2 border-2 border-slate-200 rounded-lg text-sm outline-none"/>
+                                <div class="border-2 border-dashed border-slate-200 p-3 rounded-xl flex flex-col items-center gap-2 relative">
+                                    <input id="h-file" type="file" accept="image/*,application/pdf" class="absolute inset-0 opacity-0 cursor-pointer" onchange="this.nextElementSibling.nextElementSibling.innerText = this.files[0]?.name || '上傳預訂收據'" />
+                                    <i data-lucide="file-text" width="20" class="text-slate-400"></i>
+                                    <span class="text-[10px] font-bold text-slate-500">上傳預訂收據 (PDF/圖片)</span>
+                                </div>
+                                <div class="flex gap-2 pt-2">
+                                    <button onclick="actions.toggleAddSection(null, false)" class="flex-1 py-2 bg-slate-100 rounded-lg text-xs font-bold">取消</button>
+                                    <button onclick="actions.addHotel()" class="flex-1 py-2 bg-pink-500 text-white rounded-lg text-xs font-bold">儲存</button>
+                                </div>
+                            </div>
+                        ` : ''}
+                        <div class="space-y-4">
+                            ${hotels.map(h => `
+                                <div class="bg-white border-4 border-slate-800 p-5 rounded-[32px] shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] flex flex-col gap-4">
+                                    <div class="flex justify-between items-start">
+                                        <div>
+                                            <div class="font-black text-xl text-pink-500">${h.name}</div>
+                                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Accommodation</div>
+                                        </div>
+                                        <button onclick="actions.delDoc('hotels', '${h.id}')" class="text-slate-300 hover:text-red-500"><i data-lucide="trash-2" width="16"></i></button>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded-2xl border-2 border-slate-100">
+                                        <div class="flex flex-col">
+                                            <span class="text-[9px] font-black text-slate-400 flex items-center gap-1"><i data-lucide="clock" width="10"></i> CHECK-IN</span>
+                                            <span class="text-xs font-bold text-slate-700">${h.checkIn ? new Date(h.checkIn).toLocaleString() : '--'}</span>
+                                        </div>
+                                        <div class="flex flex-col border-l-2 border-slate-200 pl-3">
+                                            <span class="text-[9px] font-black text-slate-400 flex items-center gap-1"><i data-lucide="clock" width="10"></i> CHECK-OUT</span>
+                                            <span class="text-xs font-bold text-slate-700">${h.checkOut ? new Date(h.checkOut).toLocaleString() : '--'}</span>
+                                        </div>
+                                    </div>
+                                    <div class="space-y-2">
+                                        ${h.phone ? `<div class="flex items-center gap-2 text-xs font-bold text-slate-600"><i data-lucide="phone" width="14"></i> ${h.phone}</div>` : ''}
+                                        ${h.address ? `
+                                            <div class="flex items-start gap-2 text-xs font-bold text-slate-600">
+                                                <i data-lucide="map-pin" width="14" class="flex-shrink-0 mt-0.5"></i>
+                                                <div class="flex-1">
+                                                    ${h.address}
+                                                    <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(h.address)}" target="_blank" rel="noreferrer" class="flex items-center gap-1 text-blue-500 mt-1 hover:underline">
+                                                        <i data-lucide="external-link" width="12"></i> 查看地圖
+                                                    </a>
+                                                </div>
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                    ${h.fileName ? `
+                                        <div class="bg-green-50 border-2 border-green-200 p-2 rounded-xl flex items-center justify-between">
+                                            <div class="flex items-center gap-2">
+                                                <i data-lucide="file-text" width="16" class="text-green-600"></i>
+                                                <span class="text-[10px] font-bold text-green-700 truncate max-w-[150px]">${h.fileName}</span>
+                                            </div>
+                                            <span class="text-[9px] bg-green-200 text-green-700 px-2 py-0.5 rounded-full font-black">收據已存</span>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </section>
+
+                    <section>
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="font-black text-lg flex items-center gap-2"><i data-lucide="image" width="20"></i> 其他收據</h3>
+                            <button onclick="actions.toggleAddSection('receipt', true)" class="text-amber-500 font-bold text-xs bg-white border-2 border-amber-100 px-3 py-1 rounded-full">+ 上傳</button>
+                        </div>
+                        ${isAdding && sec === 'receipt' ? `
+                            <div class="bg-white border-2 border-slate-800 p-4 rounded-2xl space-y-3 mb-4 shadow-sm">
+                                <input id="r-title" placeholder="收據名稱 (例如: 租車/門票)" class="w-full p-2 border-2 border-slate-200 rounded-lg text-sm font-bold outline-none"/>
+                                <div class="border-2 border-dashed border-slate-200 p-4 rounded-xl flex flex-col items-center gap-2 relative">
+                                    <input id="r-file" type="file" accept="image/*,application/pdf" class="absolute inset-0 opacity-0 cursor-pointer" onchange="this.nextElementSibling.nextElementSibling.innerText = this.files[0]?.name || '選擇 PDF 或 圖片'" />
+                                    <i data-lucide="image" width="24" class="text-slate-400"></i>
+                                    <span class="text-[10px] font-bold text-slate-500">選擇 PDF 或 圖片</span>
+                                </div>
+                                <div class="flex gap-2 pt-2">
+                                    <button onclick="actions.toggleAddSection(null, false)" class="flex-1 py-2 bg-slate-100 rounded-lg text-xs font-bold">取消</button>
+                                    <button onclick="actions.addReceipt()" class="flex-1 py-2 bg-amber-500 text-white rounded-lg text-xs font-bold">儲存</button>
+                                </div>
+                            </div>
+                        ` : ''}
+                        <div class="grid grid-cols-2 gap-3">
+                            ${receipts.map(r => `
+                                <div class="bg-white border-2 border-slate-800 p-3 rounded-2xl flex flex-col gap-2 relative group">
+                                    <button onclick="actions.delDoc('receipts', '${r.id}')" class="absolute -top-2 -right-2 bg-red-400 text-white p-1 rounded-full border border-slate-800"><i data-lucide="x" width="12"></i></button>
+                                    <div class="w-full aspect-square bg-slate-100 rounded-xl flex items-center justify-center">
+                                        <i data-lucide="file-text" width="32" class="text-slate-300"></i>
+                                    </div>
+                                    <div class="text-[10px] font-black text-slate-800 truncate">${r.title}</div>
+                                    <div class="text-[8px] font-bold text-slate-400 truncate italic">${r.fileName}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </section>
+                </div>
+            `;
+        }
+
+        function renderTravelMoney(travel) {
+            const currency = travel.currency || 'JPY';
+            const rate = RATES[currency] || 1;
+            const expenses = window.appState.travelData.expenses.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+            const isAdding = window.appState.isAdding;
+            const av = window.appState.globalSettings.avatars;
+            
+            const totalLocal = expenses.reduce((a, b) => a + Number(b.amount), 0);
+            const totalHKD = (totalLocal * rate).toFixed(2);
+            window._tempTrvExpCat = window._tempTrvExpCat || '飲食 🍲';
+
+            return `
+                <div class="p-6 h-full overflow-y-auto space-y-6 pb-20 no-scrollbar">
+                    <div class="bg-slate-800 text-white p-5 rounded-[28px] shadow-[4px_4px_0px_0px_rgba(30,41,59,0.3)]">
+                        <div class="flex items-center gap-2 mb-4 font-black text-sm"><i data-lucide="globe" width="16"></i> 匯率計數機</div>
+                        <div class="flex items-center gap-4">
+                            <div class="flex-1 relative">
+                                <span class="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">${currency}</span>
+                                <input id="rate-in" type="number" placeholder="0" oninput="actions.calcRate()" class="w-full bg-slate-700 p-3 pl-12 rounded-xl font-black text-white outline-none" />
+                            </div>
+                            <div class="text-slate-400">≈</div>
+                            <div id="rate-out" class="flex-1 bg-slate-700 p-3 rounded-xl font-black text-green-400 text-right">HKD 0.00</div>
+                        </div>
+                        <div class="text-[10px] text-slate-400 font-bold mt-3 text-right">參考匯率: 1 ${currency} ≈ ${rate} HKD</div>
+                    </div>
+
+                    <div class="flex justify-between items-end">
+                        <div>
+                            <div class="text-[10px] font-black text-slate-400">旅程總支出</div>
+                            <div class="text-2xl font-black">${totalLocal.toLocaleString()} <span class="text-sm">${currency}</span></div>
+                            <div class="text-xs font-bold text-green-600">≈ $${totalHKD} HKD</div>
+                        </div>
+                        <button onclick="actions.toggleAddSection('exp', true)" class="p-3 bg-blue-500 text-white rounded-xl shadow-sm"><i data-lucide="plus" width="20"></i></button>
+                    </div>
+
+                    ${isAdding && window.appState.addSection === 'exp' ? `
+                        <div class="bg-white border-4 border-slate-800 p-4 rounded-2xl space-y-3">
+                            <div class="flex items-center gap-2">
+                                <span class="font-black text-slate-400">${currency}</span>
+                                <input id="te-amt" type="number" placeholder="金額" class="flex-1 text-2xl font-black p-2 border-b-2 border-slate-200 outline-none" />
+                            </div>
+                            <div class="flex flex-wrap gap-2">
+                                <input type="hidden" id="te-cat" value="${window._tempTrvExpCat}">
+                                ${EXPENSE_CATS.map(c => `
+                                    <button onclick="window._tempTrvExpCat='${c}'; render();" class="px-3 py-1 text-[10px] border-2 border-slate-800 rounded-full font-bold ${window._tempTrvExpCat === c ? 'bg-yellow-300' : 'bg-white'}">${c}</button>
+                                `).join('')}
+                            </div>
+                            <input id="te-note" placeholder="買咗咩？" class="w-full p-2 border-2 border-slate-200 rounded-lg text-sm font-bold outline-none" />
+                            <div class="flex gap-2">
+                                <button onclick="actions.toggleAddSection(null, false)" class="flex-1 py-2 bg-slate-100 rounded-lg font-bold text-xs">取消</button>
+                                <button onclick="actions.addTravelExp()" class="flex-1 py-2 bg-slate-800 text-white rounded-lg font-bold text-xs">記低佢</button>
+                            </div>
+                        </div>
+                    ` : ''}
+
+                    <div class="space-y-3">
+                        ${expenses.map(e => `
+                            <div class="bg-white p-4 rounded-2xl border-2 border-slate-200 flex justify-between items-center shadow-sm">
+                                <div class="flex items-center gap-3">
+                                    <span class="text-2xl">${av[e.payer]}</span>
+                                    <div>
+                                        <div class="font-black text-sm">${e.note || e.cat}</div>
+                                        <div class="text-[10px] text-slate-400">${e.cat}</div>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="font-black text-lg">${e.amount} <span class="text-[10px]">${currency}</span></div>
+                                    <div class="text-[10px] text-green-500 font-bold">≈ $${e.hkd}</div>
+                                </div>
+                                <button onclick="actions.delDoc('expenses', '${e.id}')" class="text-slate-300 ml-2"><i data-lucide="trash-2" width="14"></i></button>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderTravelPrep(travel) {
+            const tab = window.appState.prepTab || 'todo';
+            const items = window.appState.travelData.prep.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+            const listItems = items.filter(i => i.type === tab);
+            const pending = listItems.filter(i => !i.done);
+            const completed = listItems.filter(i => i.done);
+            const av = window.appState.globalSettings.avatars;
+
+            const tabs = [{id:'todo', l:'必做'}, {id:'bag', l:'行李'}, {id:'shop', l:'購物'}];
+
+            return `
+                <div class="p-6 h-full flex flex-col pb-20 no-scrollbar">
+                    <div class="flex bg-white p-1 rounded-xl border-2 border-slate-300 mb-6 flex-shrink-0">
+                        ${tabs.map(t => `
+                            <button onclick="actions.setPrepTab('${t.id}')" class="flex-1 py-2 rounded-lg font-black text-xs transition-colors ${tab === t.id ? 'bg-blue-400 text-white' : 'text-slate-500'}">
+                                ${t.l}
+                            </button>
+                        `).join('')}
+                    </div>
+
+                    <div class="flex gap-2 mb-6 flex-shrink-0">
+                        <input id="prep-in" placeholder="${tab === 'shop' ? '想買咩？' : '加啲嘢入清單...'}" class="flex-1 p-3 border-2 border-slate-300 rounded-xl font-bold text-sm bg-white outline-none" />
+                        <button onclick="actions.addPrep()" class="bg-slate-800 text-white p-3 rounded-xl active:scale-95"><i data-lucide="plus" width="18"></i></button>
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto space-y-6 pr-1 no-scrollbar">
+                        <div>
+                            <h4 class="font-black text-xs text-slate-400 mb-3">${tab === 'shop' ? '想買嘅嘢 💭' : '未搞掂 ⏳'}</h4>
+                            <div class="space-y-2">
+                                ${pending.map(i => `
+                                    <div class="bg-white border-2 border-slate-800 p-3 rounded-xl shadow-sm flex items-center justify-between">
+                                        <div class="flex items-center gap-3">
+                                            <button onclick="actions.togglePrep('${i.id}', true)" class="w-5 h-5 border-2 border-slate-800 rounded flex items-center justify-center bg-white"></button>
+                                            <span class="font-bold text-sm">${i.text}</span>
+                                        </div>
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-sm">${av[i.creator]}</span>
+                                            <button onclick="actions.delDoc('prep', '${i.id}')" class="text-slate-300"><i data-lucide="trash-2" width="14"></i></button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                                ${pending.length === 0 ? `<div class="text-xs text-slate-400 font-bold">全部清空！叻仔叻女！✨</div>` : ''}
+                            </div>
+                        </div>
+
+                        ${completed.length > 0 ? `
+                            <div>
+                                <h4 class="font-black text-xs text-slate-400 mb-3">${tab === 'shop' ? '買咗啦！🛍️' : '搞掂晒 ✅'}</h4>
+                                <div class="space-y-2 opacity-60">
+                                    ${completed.map(i => `
+                                        <div class="bg-slate-100 border-2 border-slate-300 p-3 rounded-xl flex items-center justify-between">
+                                            <div class="flex items-center gap-3">
+                                                <button onclick="actions.togglePrep('${i.id}', false)" class="w-5 h-5 border-2 border-slate-400 rounded flex items-center justify-center bg-green-400"><i data-lucide="check" width="12" class="text-white"></i></button>
+                                                <span class="font-bold text-sm line-through text-slate-500">${i.text}</span>
+                                            </div>
+                                            <button onclick="actions.delDoc('prep', '${i.id}')" class="text-slate-400"><i data-lucide="trash-2" width="14"></i></button>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderSettingsView() {
+            const av = window.appState.globalSettings.avatars;
+            return `
+                <div class="p-6 h-full flex flex-col">
+                    <div class="flex items-center gap-4 mb-10">
+                        <button onclick="setView('dashboard')" class="p-2 bg-white border-2 border-slate-800 rounded-full"><i data-lucide="arrow-left"></i></button>
+                        <h2 class="text-2xl font-black">設定 ⚙️</h2>
+                    </div>
+
+                    <div class="bg-white border-4 border-slate-800 p-8 rounded-[40px] shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] space-y-8">
+                        <div>
+                            <label class="text-xs font-black text-slate-400 uppercase mb-4 block">更改頭像 Emoji</label>
+                            <div class="grid grid-cols-2 gap-4">
+                                ${['Yu', 'Cheuk'].map(n => `
+                                    <div class="flex flex-col items-center gap-2">
+                                        <span class="text-xs font-bold">${n}</span>
+                                        <input id="set-${n.toLowerCase()}" value="${av[n]}" class="w-full text-center text-4xl p-4 bg-slate-50 rounded-2xl border-4 border-slate-800 outline-none" />
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                        <button onclick="actions.saveSettings()" class="w-full py-5 bg-slate-800 text-white rounded-[24px] font-black text-xl shadow-[6px_6px_0px_0px_rgba(30,41,59,0.3)] flex items-center justify-center gap-2 active:scale-95 transition-transform">
+                            <i data-lucide="save" width="20"></i> 儲存設定
+                        </button>
+                    </div>
+
+                    <button onclick="window.location.reload()" class="mt-auto p-4 text-red-500 font-black flex items-center justify-center gap-2"><i data-lucide="log-out" width="18"></i> 登出 / 重新整理</button>
+                </div>
+            `;
+        }
+
+    </script>
+</body>
+</html>
